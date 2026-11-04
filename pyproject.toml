@@ -40,6 +40,7 @@ dev = ["pytest>=7.0"]
 
 [project.scripts]
 kgb = "kg_builder.cli:cli"
+mpe = "maturity.cli:cli"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

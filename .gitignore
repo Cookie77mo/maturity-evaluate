@@ -48,3 +48,10 @@ examples/sample_repo/__pycache__/
 examples/comprehensive_test_repo/**/__pycache__/
 pytest-of-xueht
 cloud-native-maturity-evaluate/
+
+# Local config in any subdir (API keys)
+**/config.local.yaml
+
+# Temporary files
+_fresh/
+*.zip
