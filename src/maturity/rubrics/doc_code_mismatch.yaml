@@ -1,0 +1,24 @@
+# 示例 Rubric（doc_code_mismatch）
+# 仅作为示例，未确定标准
+#
+# 字段说明：
+#   indicator     指标 ID，与规则层命名保持一致
+#   dimension     必须是 reliability / observability / maintainability /
+#                 consistency / configurability / security 之一
+#   question      要模型回答的那一个判断句
+#   pass_criteria 什么情况算合格（不报问题）
+#   fail_criteria 什么情况算不合格（报问题）
+#   severity      命中时的严重度（low / medium / high），由 Rubric 固定
+rubrics:
+  - indicator: doc_code_mismatch
+    dimension: consistency
+    severity: medium
+    title: 文档描述的服务缺少代码实现
+    question: 文档中描述的该服务/接口，在知识图谱里能否找到代码侧（source_type=source_code）的证据？
+    pass_criteria: >-
+      目标节点存在至少一条 source_type=source_code 的 provenance；
+      或者该节点属于纯第三方依赖、代码采集范围之外，文档标注也已说明这一点。
+    fail_criteria: >-
+      目标节点只有文档来源的 provenance，并且用 find_nodes 在全图查找同名/近名节点后，
+      仍然找不到任何代码来源的证据 —— 说明文档描述与实现不一致（文档过期或实现缺失）。
+    suggestion: 核对文档与实现：更新过期文档，或补齐缺失的实现与采集配置。

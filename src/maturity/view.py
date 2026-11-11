@@ -1,6 +1,12 @@
-"""知识图谱只读视图：给规则层提供稳定、语义化的访问接口。
+"""
+知识图谱只读视图：给规则层提供稳定、语义化的访问接口。
 
-不修改 ``KnowledgeGraph``，只做查询与派生（服务子图、证据摘录、文件定位）。
+为什么需要这一层？
+  模块一的 KnowledgeGraph 是底层结构（nodes/edges/provenance 的原始 list），
+  如果让 10 条规则各自去遍历原始结构，一旦模块一改内部字段名，所有规则都要跟着改。
+  GraphView 把常用查询封装成方法，规则层只调用这些方法，实现解耦。
+
+设计原则：只读，不修改 KnowledgeGraph；只做查询与派生（子图、证据、文件定位）。
 """
 from __future__ import annotations
 
@@ -29,8 +35,15 @@ def _strip_line(source_id: str) -> str:
 
 
 class GraphView:
+    """对 KnowledgeGraph 的只读封装。
+
+    内部用 _nodes 字典建 id->节点 的索引，O(1) 查找。
+    所有方法都是"读"操作，不会改原始图谱。
+    """
+
     def __init__(self, graph: KnowledgeGraph) -> None:
         self.graph = graph
+        # 建索引：id -> KGNode，避免每次 find 都遍历全部节点
         self._nodes: dict[str, KGNode] = {n.id: n for n in graph.nodes}
 
     # ------------------------------------------------------------------ 基础
@@ -67,7 +80,18 @@ class GraphView:
 
     # -------------------------------------------------------------- 服务子图
     def service_graph(self, relations: Iterable[str] = SERVICE_RELATIONS) -> nx.DiGraph:
-        """只含 Service→Service 边的有向图，供图算法使用。"""
+        """抽取只含 Service->Service 的有向子图，供图算法使用。
+
+        为什么要单独抽子图？
+          networkx 的图算法（强连通分量、割点、最长路径）只认 networkx 的图对象，
+          不认识模块一的 KGEdge。所以要把 Service 间的 CALLS/DEPENDS_ON 关系
+          转成一个干净的 nx.DiGraph。
+
+        为什么只取 CALLS/DEPENDS_ON？
+          依赖环、单点故障、调用链长度这些指标，只关心服务间的调用/依赖拓扑，
+          CONFIGURED_BY（读配置）、READS/WRITES（读写数据库）不属于"服务调用关系"，
+          混进来会污染图算法的结果。
+        """
         rels = set(relations)
         graph = nx.DiGraph()
         for service in self.services():
@@ -75,6 +99,7 @@ class GraphView:
         for edge in self.graph.edges:
             if edge.relation not in rels:
                 continue
+            # 只保留两端都是 Service 的边（文档->服务、服务->部署等非服务间边跳过）
             if edge.source not in graph or edge.target not in graph:
                 continue
             graph.add_edge(edge.source, edge.target, relation=edge.relation)
@@ -107,7 +132,16 @@ class GraphView:
 
     # -------------------------------------------------------------- 修复目标
     def file_targets(self, node_ids: Iterable[str]) -> list[str]:
-        """从 provenance 中提取真实文件路径，作为模块三的修复锚点。"""
+        """从 provenance 中提取真实文件路径，作为模块三的修复锚点。
+
+        模块三拿到问题后，要知道改哪个文件。
+        来源是节点的 provenance.source_id，比如 "src/order_service.py:42"。
+        过滤逻辑：
+          - 剥掉行号后缀（:42 或 :42-50），只留文件路径
+          - 跳过带 :// 的 URL（不是本地文件）
+          - 只保留代码/配置/文档后缀（_FILE_SUFFIXES），过滤掉非文件来源
+        返回排序去重后的文件路径列表。
+        """
         found: set[str] = set()
         for node_id in node_ids:
             node = self.node(node_id)
@@ -125,6 +159,13 @@ class GraphView:
 
     # ------------------------------------------------------------------ 覆盖
     def coverage(self) -> dict[str, Any]:
+        """统计图谱的数据覆盖情况。
+
+        规则层用它来判断哪些规则该跑、哪些只报采集缺口：
+          - has_deployment=False -> 副本数、探针类规则跳过（没部署数据，判了也是瞎猜）
+          - has_runtime=False    -> 可观测性规则只报一条"缺少运行时数据"，不逐服务刷
+          - has_service=False    -> 整个分析没意义（连服务都没采集到）
+        """
         stats = self.graph.stats()
         by_type = stats.get("nodes_by_type", {})
         return {

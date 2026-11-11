@@ -52,6 +52,8 @@ where = ["src"]
 # works from any working directory.
 [tool.setuptools.package-data]
 "kg_builder.collectors.code" = ["enrichment/semgrep_rules/*.yaml"]
+# Ship module-2 Agent rubrics so `mpe agent-judge` works from any directory.
+"maturity" = ["rubrics/*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

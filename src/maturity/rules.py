@@ -1,6 +1,7 @@
 """确定性图规则层（无 LLM）。
 
-每条规则只读 ``GraphView``，输出带证据链的 ``Problem``。
+
+每条规则读 ``GraphView``，输出带证据链的 ``Problem``。
 数据缺失时规则**不臆造问题**（例如没有 Deployment 节点就不判副本数），
 覆盖缺口由 ``coverage`` / 可观测性规则单独报告。
 """
@@ -83,6 +84,7 @@ def rule_dependency_cycle(view: GraphView, cfg: RuleThresholds) -> list[Problem]
             view,
             dimension=Dimension.MAINTAINABILITY,
             indicator="dependency_cycle",
+            # 环里有核心业务服务时升为 high，否则 medium
             severity=Severity.HIGH if core else Severity.MEDIUM,
             title="服务依赖存在环",
             statement=(
@@ -91,6 +93,8 @@ def rule_dependency_cycle(view: GraphView, cfg: RuleThresholds) -> list[Problem]
             ),
             entities=nodes,
             edges=edges,
+            # paths 放的是整个强连通分量的节点集合（不是一条简单路径），
+            # 用于让阅读者直观看到环里包含哪些服务
             paths=[sorted(component)],
             confidence=0.95,
             suggestion="梳理调用方向，抽离公共能力或引入异步解耦，打断环。",
@@ -167,6 +171,7 @@ def rule_long_call_chain(view: GraphView, cfg: RuleThresholds) -> list[Problem]:
     sg = view.service_graph()
     if sg.number_of_nodes() < 2 or not nx.is_directed_acyclic_graph(sg):
         return []
+    # 只报告最长的一条调用链（避免把所有超长链都报出来刷屏）
     path = nx.dag_longest_path(sg)
     if len(path) - 1 < cfg.max_chain:
         return []
@@ -263,17 +268,22 @@ def rule_config_conflict(view: GraphView, cfg: RuleThresholds) -> list[Problem]:
     """同一配置键在多个来源/文件中取值不一致。"""
     problems: list[Problem] = []
     for node in view.find("Config"):
+        # values: {配置值: [来源文件1, 来源文件2, ...]}
+        # 同一配置键在不同文件里取了不同值 -> 冲突
         values: dict[str, list[str]] = {}
+        # 1) 先看节点属性里直接存的 value（来自 K8s/部署解析器）
         attr_value = node.attributes.get("value")
         if attr_value is not None:
-            values.setdefault(str(attr_value), [])
+            values.setdefault(str(attr_value), ["<node-attribute>"])
+        # 2) 再从每条 provenance 的 evidence 文本里用正则抠 "key=value" 的 value
         for prov in node.provenance:
             match = _VALUE_RE.search(prov.evidence or "")
             if not match:
                 continue
             raw = match.group(1).strip()
             if raw:
-                values.setdefault(raw, []).append(prov.source_id)
+                values.setdefault(raw, []).append(prov.source_id or "<unknown>")
+        # 只有出现 >= 2 个不同取值才算冲突
         if len(values) < 2:
             continue
         problems.append(_problem(
